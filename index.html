@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>pattern LAB Pro v4.3</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- React & ReactDOM -->
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f8f8f8;
+            margin: 0;
+            overflow: hidden;
+        }
+
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #dcdcdc; border-radius: 10px; }
+
+        input[type="range"] { -webkit-appearance: none; background: transparent; width: 100%; }
+        input[type="range"]::-webkit-slider-thumb { 
+            -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; 
+            background: #000; border: 2px solid white; box-shadow: 0 1px 4px rgba(0,0,0,0.3); margin-top: -7px; 
+        }
+        input[type="range"]::-webkit-slider-runnable-track { width: 100%; height: 2px; background: #eee; border-radius: 1px; }
+
+        .canvas-container {
+            touch-action: none;
+            user-select: none;
+        }
+        
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef, useLayoutEffect, useMemo } = React;
+
+        // --- UI Components ---
+        const Icon = ({ name, size = 16, className = "" }) => {
+            const iconRef = useRef(null);
+            useEffect(() => {
+                if (window.lucide) {
+                    window.lucide.createIcons();
+                }
+            }, [name]);
+            return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
+        };
+
+        const ControlGroup = ({ label, value, min, max, step, onChange, dark, colorClass }) => (
+            <div className="space-y-1 group">
+                <div className="flex items-center justify-between">
+                    <label className={`text-[9px] font-black uppercase ${dark ? 'text-zinc-500' : 'text-zinc-400'} group-hover:text-blue-500 transition-colors`}>{label}</label>
+                    <span className={`text-[10px] font-mono font-black ${colorClass || (dark ? 'text-blue-400' : 'text-blue-600')}`}>{value}</span>
+                </div>
+                <input 
+                    type="range" min={min} max={max} step={step} value={value} 
+                    onChange={(e) => onChange(e.target.value)} 
+                    className={`${dark ? 'accent-blue-500' : 'accent-black'}`} 
+                />
+            </div>
+        );
+
+        // --- Main App ---
+        const App = () => {
+            const ATTR_HANDLE_RADIUS = 25; 
+            const canvasRef = useRef(null);
+            const containerRef = useRef(null);
+            const fileInputRef = useRef(null);
+
+            const [patternType, setPatternType] = useState('hexagonal');
+            const [boundaryShape, setBoundaryShape] = useState('rect');
+            const [attractorMode, setAttractorMode] = useState('radial'); 
+            const [bgImage, setBgImage] = useState(null);
+            
+            const [params, setParams] = useState({
+                baseDiameter: 2.5,
+                minDiameter: 0.5,
+                spacingX: 5.0,
+                spacingY: 5.0,
+                boundaryW: 140,
+                boundaryH: 100,
+                stagger: 0.5,
+                mirrorCount: 6,
+                influenceRange: 35,
+                attractorRadius: 40, // 吸引子圓環半徑 (mm)
+                falloff: 1.0,
+                rotation: 0,
+                viewZoom: 6,
+                panX: 0,
+                panY: 0,
+                cvs: [ {x: -50, y: -20}, {x: -20, y: 30}, {x: 20, y: -30}, {x: 50, y: 20} ],
+                linePts: [ {x: -40, y: 0}, {x: 40, y: 0} ],
+                bgWidth: 200, bgOffsetX: 0, bgOffsetY: 0, bgOpacity: 0.5,
+                bgColor: '#ffffff', color: '#1a1a1a'
+            });
+
+            const [interaction, setInteraction] = useState({ active: false, mode: null, index: -1, startX: 0, startY: 0 });
+            const [canvasDim, setCanvasDim] = useState({ w: 0, h: 0 });
+            const [stats, setStats] = useState({ totalDots: 0, transparency: 0 });
+
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = (event) => {
+                        const img = new Image();
+                        img.onload = () => setBgImage(img);
+                        img.src = event.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            };
+
+            const getBezierPoint = (t, pts) => {
+                const it = 1 - t;
+                return {
+                    x: it**3 * pts[0].x + 3*it**2 * t * pts[1].x + 3*it * t**2 * pts[2].x + t**3 * pts[3].x,
+                    y: it**3 * pts[0].y + 3*it**2 * t * pts[1].y + 3*it * t**2 * pts[2].y + t**3 * pts[3].y
+                };
+            };
+
+            const distToCurve = (px, py, pts) => {
+                let minD = Infinity;
+                for (let i = 0; i <= 30; i++) {
+                    const p = getBezierPoint(i / 30, pts);
+                    const d = Math.sqrt((px - p.x)**2 + (py - p.y)**2);
+                    if (d < minD) minD = d;
+                }
+                return minD;
+            };
+
+            const distToLine = (px, py, pts) => {
+                const [p1, p2] = pts;
+                const dx = p2.x - p1.x; const dy = p2.y - p1.y;
+                const lenSq = dx*dx + dy*dy;
+                if (lenSq === 0) return Math.sqrt((px - p1.x)**2 + (py - p1.y)**2);
+                let t = Math.max(0, Math.min(1, ((px - p1.x) * dx + (py - p1.y) * dy) / lenSq));
+                return Math.sqrt((px - (p1.x + t * dx))**2 + (py - (p1.y + t * dy))**2);
+            };
+
+            const calculateDotSize = (x, y) => {
+                if (attractorMode === 'none') return params.baseDiameter;
+                
+                let dAtt = 0;
+                if (attractorMode === 'radial') {
+                    const centerDist = Math.sqrt(x*x + y*y);
+                    // 雙向影響邏輯：取圓點到吸引子圓周的絕對距離
+                    dAtt = Math.abs(centerDist - params.attractorRadius);
+                }
+                else if (attractorMode === 'curve') dAtt = distToCurve(x, y, params.cvs);
+                else if (attractorMode === 'line') dAtt = distToLine(x, y, params.linePts);
+                
+                const t = Math.min(1, dAtt / params.influenceRange);
+                const curvedT = Math.pow(t, params.falloff);
+                return params.minDiameter + (params.baseDiameter - params.minDiameter) * curvedT;
+            };
+
+            const isInside = (x, y) => {
+                if (boundaryShape === 'rect') {
+                    return Math.abs(x) <= params.boundaryW / 2 && Math.abs(y) <= params.boundaryH / 2;
+                } else {
+                    return (x*x + y*y) <= (params.boundaryW / 2)**2;
+                }
+            };
+
+            const onWheel = (e) => {
+                e.preventDefault();
+                const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+                const newZoom = Math.min(Math.max(params.viewZoom * zoomFactor, 1), 50);
+                setParams(p => ({ ...p, viewZoom: Number(newZoom.toFixed(2)) }));
+            };
+
+            const handleInteraction = (e, type) => {
+                if (!canvasRef.current) return;
+                const rect = canvasRef.current.getBoundingClientRect();
+                const clientX = e.clientX || (e.touches && e.touches[0].clientX);
+                const clientY = e.clientY || (e.touches && e.touches[0].clientY);
+                const mx = (clientX - rect.left - canvasDim.w / 2 - params.panX) / params.viewZoom;
+                const my = (clientY - rect.top - canvasDim.h / 2 - params.panY) / params.viewZoom;
+
+                if (type === 'start') {
+                    if (e.button === 1) {
+                        setInteraction({ active: true, mode: 'canvasPan', startX: clientX, startY: clientY, initialPanX: params.panX, initialPanY: params.panY });
+                        return;
+                    }
+                    const attrPts = attractorMode === 'curve' ? params.cvs : attractorMode === 'line' ? params.linePts : [];
+                    for (let i = 0; i < attrPts.length; i++) {
+                        const d = Math.sqrt((mx - attrPts[i].x)**2 + (my - attrPts[i].y)**2) * params.viewZoom;
+                        if (d < ATTR_HANDLE_RADIUS) {
+                            setInteraction({ active: true, mode: 'attractor', index: i });
+                            return;
+                        }
+                    }
+                    if (bgImage) {
+                        const aspect = bgImage.height / bgImage.width;
+                        const hx = params.bgOffsetX + params.bgWidth / 2;
+                        const hy = params.bgOffsetY + (params.bgWidth * aspect) / 2;
+                        if (Math.sqrt((mx - hx)**2 + (my - hy)**2) * params.viewZoom < 30) {
+                            setInteraction({ active: true, mode: 'bgScale' });
+                            return;
+                        }
+                        const hw = params.bgWidth / 2;
+                        const hh = (params.bgWidth * aspect) / 2;
+                        if (mx > params.bgOffsetX - hw && mx < params.bgOffsetX + hw && my > params.bgOffsetY - hh && my < params.bgOffsetY + hh) {
+                            setInteraction({ active: true, mode: 'bgMove', startX: mx - params.bgOffsetX, startY: my - params.bgOffsetY });
+                            return;
+                        }
+                    }
+                } else if (type === 'move' && interaction.active) {
+                    if (interaction.mode === 'canvasPan') {
+                        const dx = clientX - interaction.startX;
+                        const dy = clientY - interaction.startY;
+                        setParams(p => ({ ...p, panX: interaction.initialPanX + dx, panY: interaction.initialPanY + dy }));
+                    } else if (interaction.mode === 'attractor') {
+                        const key = attractorMode === 'curve' ? 'cvs' : 'linePts';
+                        const updated = [...params[key]];
+                        updated[interaction.index] = { x: mx, y: my };
+                        setParams(p => ({ ...p, [key]: updated }));
+                    } else if (interaction.mode === 'bgMove') {
+                        setParams(p => ({ ...p, bgOffsetX: mx - interaction.startX, bgOffsetY: my - interaction.startY }));
+                    } else if (interaction.mode === 'bgScale') {
+                        const newWidth = Math.abs(mx - params.bgOffsetX) * 2;
+                        setParams(p => ({ ...p, bgWidth: Math.max(5, newWidth) }));
+                    }
+                } else if (type === 'end') {
+                    setInteraction({ active: false, mode: null, index: -1 });
+                }
+            };
+
+            const exportSVG = () => {
+                const { boundaryW, boundaryH, color, bgColor } = params;
+                const padding = 20;
+                const w = boundaryW + padding * 2;
+                const h = boundaryH + padding * 2;
+                const cx = w / 2;
+                const cy = h / 2;
+
+                let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`;
+                svg += `<svg width="${w}mm" height="${h}mm" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">\n`;
+                svg += `  <rect width="100%" height="100%" fill="${bgColor}"/>\n`;
+                svg += `  <g transform="translate(${cx}, ${cy})">\n`;
+
+                const getCircleTag = (x, y) => {
+                    if (!isInside(x, y)) return "";
+                    const dia = calculateDotSize(x, y);
+                    return `    <circle cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="${(dia/2).toFixed(3)}" fill="${color}"/>\n`;
+                };
+
+                if (patternType === 'grid' || patternType === 'hexagonal') {
+                    const vStep = patternType === 'hexagonal' ? params.spacingY * 0.866 : params.spacingY;
+                    const nx = Math.ceil(params.boundaryW / params.spacingX) + 2;
+                    const ny = Math.ceil(params.boundaryH / vStep) + 2;
+                    for (let r = -Math.floor(ny/2); r <= Math.floor(ny/2); r++) {
+                        const offset = (patternType === 'hexagonal' && r % 2 !== 0) ? params.spacingX * params.stagger : 0;
+                        for (let c = -Math.floor(nx/2); c <= Math.floor(nx/2); c++) {
+                            svg += getCircleTag(c * params.spacingX + offset, r * vStep);
+                        }
+                    }
+                } else {
+                    const rLimit = Math.ceil(params.boundaryW / (params.spacingY * 2));
+                    for (let r = 1; r <= rLimit; r++) {
+                        const rad = r * params.spacingY;
+                        const count = Math.max(params.mirrorCount, Math.round((2 * Math.PI * rad / params.spacingX) / params.mirrorCount) * params.mirrorCount);
+                        for (let i = 0; i < count; i++) {
+                            const angle = (i / count) * Math.PI * 2 + (params.rotation * Math.PI / 180);
+                            svg += getCircleTag(rad * Math.cos(angle), rad * Math.sin(angle));
+                        }
+                    }
+                }
+                svg += `  </g>\n</svg>`;
+                const blob = new Blob([svg], { type: 'image/svg+xml' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                link.href = url;
+                link.download = `pattern-export.svg`;
+                link.click();
+                URL.revokeObjectURL(url);
+            };
+
+            useLayoutEffect(() => {
+                const updateSize = () => {
+                    if (containerRef.current) {
+                        const rect = containerRef.current.getBoundingClientRect();
+                        if (rect.width > 0 && rect.height > 0) setCanvasDim({ w: rect.width, h: rect.height });
+                    }
+                };
+                updateSize();
+                const observer = new ResizeObserver(updateSize);
+                if (containerRef.current) observer.observe(containerRef.current);
+                return () => observer.disconnect();
+            }, []);
+
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas || canvasDim.w === 0) return;
+                const ctx = canvas.getContext('2d', { alpha: false });
+                const { w, h } = canvasDim;
+                const cx = w / 2 + params.panX; 
+                const cy = h / 2 + params.panY;
+                const zoom = params.viewZoom;
+
+                ctx.fillStyle = params.bgColor;
+                ctx.fillRect(0, 0, w, h);
+
+                if (bgImage) {
+                    ctx.save();
+                    ctx.globalAlpha = params.bgOpacity;
+                    const aspect = bgImage.height / bgImage.width;
+                    const bw = params.bgWidth * zoom;
+                    const bh = bw * aspect;
+                    const bx = cx + params.bgOffsetX * zoom - bw / 2;
+                    const by = cy + params.bgOffsetY * zoom - bh / 2;
+                    ctx.drawImage(bgImage, bx, by, bw, bh);
+                    ctx.globalAlpha = 0.8; ctx.strokeStyle = '#3b82f6'; ctx.setLineDash([5, 5]);
+                    ctx.strokeRect(bx, by, bw, bh);
+                    ctx.fillStyle = '#3b82f6'; ctx.setLineDash([]);
+                    ctx.fillRect(bx + bw - 6, by + bh - 6, 12, 12);
+                    ctx.restore();
+                }
+
+                ctx.save();
+                ctx.strokeStyle = '#ef4444';
+                ctx.lineWidth = 1.5;
+                if (boundaryShape === 'rect') {
+                    ctx.strokeRect(cx - (params.boundaryW/2)*zoom, cy - (params.boundaryH/2)*zoom, params.boundaryW*zoom, params.boundaryH*zoom);
+                } else {
+                    ctx.beginPath(); ctx.arc(cx, cy, (params.boundaryW/2)*zoom, 0, Math.PI*2); ctx.stroke();
+                }
+                ctx.restore();
+
+                ctx.save();
+                if (attractorMode !== 'none') {
+                    const pts = attractorMode === 'curve' ? params.cvs : attractorMode === 'line' ? params.linePts : [];
+                    const color = attractorMode === 'curve' ? '#3b82f6' : attractorMode === 'line' ? '#ef4444' : '#10b981';
+                    ctx.strokeStyle = color; ctx.lineWidth = 2;
+                    if (attractorMode === 'radial') {
+                        ctx.setLineDash([4, 4]); 
+                        ctx.beginPath(); 
+                        ctx.arc(cx, cy, params.attractorRadius * zoom, 0, Math.PI*2); 
+                        ctx.stroke();
+                        ctx.setLineDash([]);
+                        ctx.beginPath();
+                        ctx.moveTo(cx-10, cy); ctx.lineTo(cx+10, cy);
+                        ctx.moveTo(cx, cy-10); ctx.lineTo(cx, cy+10);
+                        ctx.stroke();
+                    } else {
+                        ctx.beginPath();
+                        if (attractorMode === 'line') {
+                            ctx.moveTo(cx + pts[0].x * zoom, cy + pts[0].y * zoom);
+                            ctx.lineTo(cx + pts[1].x * zoom, cy + pts[1].y * zoom);
+                        } else {
+                            for (let t = 0; t <= 1; t += 0.02) {
+                                const p = getBezierPoint(t, pts);
+                                if (t === 0) ctx.moveTo(cx + p.x * zoom, cy + p.y * zoom);
+                                else ctx.lineTo(cx + p.x * zoom, cy + p.y * zoom);
+                            }
+                        }
+                        ctx.stroke();
+                        pts.forEach(p => {
+                            ctx.fillStyle = color;
+                            ctx.beginPath(); ctx.arc(cx + p.x * zoom, cy + p.y * zoom, 5, 0, Math.PI*2); ctx.fill();
+                            ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+                        });
+                    }
+                }
+                ctx.restore();
+
+                ctx.fillStyle = params.color;
+                let dotCount = 0;
+                const renderDot = (x, y) => {
+                    if (!isInside(x, y)) return;
+                    const dia = calculateDotSize(x, y);
+                    ctx.beginPath(); ctx.arc(cx + x * zoom, cy + y * zoom, (dia / 2) * zoom, 0, Math.PI * 2); ctx.fill();
+                    dotCount++;
+                };
+
+                if (patternType === 'grid' || patternType === 'hexagonal') {
+                    const vStep = patternType === 'hexagonal' ? params.spacingY * 0.866 : params.spacingY;
+                    const nx = Math.ceil(params.boundaryW / params.spacingX) + 2;
+                    const ny = Math.ceil(params.boundaryH / vStep) + 2;
+                    for (let r = -Math.floor(ny/2); r <= Math.floor(ny/2); r++) {
+                        const offset = (patternType === 'hexagonal' && r % 2 !== 0) ? params.spacingX * params.stagger : 0;
+                        for (let c = -Math.floor(nx/2); c <= Math.floor(nx/2); c++) renderDot(c * params.spacingX + offset, r * vStep);
+                    }
+                } else {
+                    const rLimit = Math.ceil(params.boundaryW / (params.spacingY * 2));
+                    for (let r = 1; r <= rLimit; r++) {
+                        const rad = r * params.spacingY;
+                        const count = Math.max(params.mirrorCount, Math.round((2 * Math.PI * rad / params.spacingX) / params.mirrorCount) * params.mirrorCount);
+                        for (let i = 0; i < count; i++) {
+                            const angle = (i / count) * Math.PI * 2 + (params.rotation * Math.PI / 180);
+                            renderDot(rad * Math.cos(angle), rad * Math.sin(angle));
+                        }
+                    }
+                }
+                const area = boundaryShape === 'circle' ? Math.PI * (params.boundaryW/2)**2 : params.boundaryW * params.boundaryH;
+                setStats({ totalDots: dotCount, transparency: area > 0 ? Math.round((dotCount * Math.PI * (params.baseDiameter/2)**2) / area * 100) : 0 });
+            }, [params, patternType, boundaryShape, attractorMode, canvasDim, bgImage]);
+
+            return (
+                <div className="flex flex-col h-screen bg-[#f8f8f8] text-[#1a1a1a] font-sans overflow-hidden select-none">
+                    <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-black/5 z-20 shadow-sm">
+                        <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 bg-black rounded-lg flex items-center justify-center text-white font-black italic shadow-lg text-xl">B</div>
+                            <div>
+                                <h1 className="text-sm font-black uppercase tracking-widest leading-none text-black">pattern LAB</h1>
+                                <p className="text-[10px] text-gray-400 font-bold uppercase mt-1 tracking-widest">Master Edition v4.3</p>
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => fileInputRef.current.click()} className="p-2.5 bg-gray-100 rounded-full hover:bg-gray-200" title="Upload Background"><Icon name="upload" /></button>
+                            <input ref={fileInputRef} type="file" hidden accept="image/*" onChange={handleImageUpload} />
+                            <button onClick={() => {
+                                const link = document.createElement('a');
+                                link.download = `preview.png`;
+                                link.href = canvasRef.current.toDataURL('image/png');
+                                link.click();
+                            }} className="p-2.5 bg-gray-100 rounded-full hover:bg-gray-200" title="Download PNG Preview"><Icon name="image" /></button>
+                            <button onClick={exportSVG} className="p-2.5 bg-black text-white rounded-full shadow-lg active:scale-95 transition-transform" title="Export CAD SVG"><Icon name="download" /></button>
+                        </div>
+                    </header>
+
+                    <main className="flex flex-1 flex-col md:flex-row overflow-hidden">
+                        <aside className="w-full md:w-96 bg-white border-r border-black/5 p-6 overflow-y-auto custom-scrollbar shadow-inner z-10 max-h-[45%] md:max-h-full">
+                            <div className="grid grid-cols-2 gap-4 mb-6">
+                                <section>
+                                    <h2 className="text-[10px] font-black uppercase tracking-widest mb-3 text-gray-400 border-b pb-1">1. Array Pattern</h2>
+                                    <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                                        {['grid', 'hexagonal', 'radial'].map(m => (
+                                            <button key={m} onClick={() => setPatternType(m)} className={`flex-1 p-2 rounded-md transition-all ${patternType === m ? 'bg-white shadow-sm' : 'opacity-40'}`}>
+                                                <Icon name={m === 'grid' ? 'grid-3x3' : m === 'hexagonal' ? 'hexagon' : 'circle-dot'} size={14} className="mx-auto" />
+                                            </button>
+                                        ))}
+                                    </div>
+                                </section>
+                                <section>
+                                    <h2 className="text-[10px] font-black uppercase tracking-widest mb-3 text-gray-400 border-b pb-1">2. Field Mode</h2>
+                                    <div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                                        {['none', 'radial', 'curve', 'line'].map(m => (
+                                            <button key={m} onClick={() => setAttractorMode(m)} className={`flex-1 p-2 rounded-md transition-all ${attractorMode === m ? 'bg-white shadow-sm' : 'opacity-40'}`}>
+                                                <Icon name={m === 'none' ? 'ban' : m === 'radial' ? 'target' : m === 'curve' ? 'spline' : 'minus'} size={14} className="mx-auto" />
+                                            </button>
+                                        ))}
+                                    </div>
+                                </section>
+                            </div>
+
+                            <div className="space-y-6">
+                                <section className="space-y-4">
+                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-gray-400 border-b pb-1">3. Geometry Data (mm)</h2>
+                                    <ControlGroup label="Base Diameter" value={params.baseDiameter} min={0.5} max={10} step={0.1} onChange={v => setParams(p => ({...p, baseDiameter: parseFloat(v)}))} />
+                                    {attractorMode !== 'none' && (
+                                        <div className="p-4 bg-blue-50/30 rounded-xl space-y-4 border border-blue-100/50">
+                                            <h3 className="text-[8px] font-black text-blue-400 uppercase tracking-widest mb-2">Field Influence Settings</h3>
+                                            
+                                            {attractorMode === 'radial' && (
+                                                <ControlGroup label="Circle Radius" value={params.attractorRadius} min={0} max={200} step={1} onChange={v => setParams(p => ({...p, attractorRadius: parseFloat(v)}))} colorClass="text-emerald-600" />
+                                            )}
+                                            
+                                            <ControlGroup label="Min Diameter" value={params.minDiameter} min={0.1} max={5} step={0.1} onChange={v => setParams(p => ({...p, minDiameter: parseFloat(v)}))} colorClass="text-blue-500" />
+                                            <ControlGroup label="Influence Range" value={params.influenceRange} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, influenceRange: parseFloat(v)}))} colorClass="text-blue-500" />
+                                            <ControlGroup label="Falloff (Exponent)" value={params.falloff} min={0.1} max={5.0} step={0.1} onChange={v => setParams(p => ({...p, falloff: parseFloat(v)}))} colorClass="text-purple-500" />
+                                        </div>
+                                    )}
+                                </section>
+
+                                <section className="p-4 bg-gray-50 rounded-xl space-y-4 shadow-sm border border-black/5">
+                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-gray-400 border-b pb-1 flex items-center gap-2"><Icon name="layers" size={12} /> 4. Array Modifiers</h2>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <ControlGroup label="X-Spacing" value={params.spacingX} min={1.5} max={25} step={0.5} onChange={v => setParams(p => ({...p, spacingX: parseFloat(v)}))} />
+                                        <ControlGroup label="Y-Spacing" value={params.spacingY} min={1.5} max={25} step={0.5} onChange={v => setParams(p => ({...p, spacingY: parseFloat(v)}))} />
+                                    </div>
+                                    {patternType === 'hexagonal' && <ControlGroup label="Hex Stagger" value={params.stagger} min={0} max={1} step={0.01} onChange={v => setParams(p => ({...p, stagger: parseFloat(v)}))} />}
+                                    {patternType === 'radial' && (
+                                        <div className="space-y-4">
+                                            <ControlGroup label="Mirror Count" value={params.mirrorCount} min={1} max={16} step={1} onChange={v => setParams(p => ({...p, mirrorCount: parseInt(v)}))} />
+                                            <ControlGroup label="Rotation" value={params.rotation} min={0} max={360} step={1} onChange={v => setParams(p => ({...p, rotation: parseFloat(v)}))} />
+                                        </div>
+                                    )}
+                                </section>
+
+                                <section className="space-y-4">
+                                    <h2 className="text-[10px] font-black uppercase tracking-widest text-gray-400 border-b pb-1">5. Physical Boundary (mm)</h2>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <button onClick={() => setBoundaryShape('rect')} className={`py-2 text-[9px] font-black rounded border transition-all ${boundaryShape === 'rect' ? 'bg-black text-white shadow-md' : 'bg-white text-gray-300'}`}>RECTANGLE</button>
+                                        <button onClick={() => setBoundaryShape('circle')} className={`py-2 text-[9px] font-black rounded border transition-all ${boundaryShape === 'circle' ? 'bg-black text-white shadow-md' : 'bg-white text-gray-300'}`}>CIRCLE</button>
+                                    </div>
+                                    <ControlGroup label="Width" value={params.boundaryW} min={20} max={600} step={1} onChange={v => setParams(p => ({...p, boundaryW: parseFloat(v)}))} />
+                                    {boundaryShape === 'rect' && <ControlGroup label="Height" value={params.boundaryH} min={20} max={600} step={1} onChange={v => setParams(p => ({...p, boundaryH: parseFloat(v)}))} />}
+                                </section>
+
+                                {(attractorMode === 'curve' || attractorMode === 'line') && (
+                                    <section className="p-4 bg-zinc-50 rounded-xl space-y-3 border border-black/5 shadow-sm">
+                                        <h2 className="text-[10px] font-black uppercase tracking-widest text-zinc-400 flex items-center gap-2"><Icon name="grip-horizontal" size={12} /> 6. Node Coordinates</h2>
+                                        <div className="space-y-3">
+                                            {(attractorMode === 'curve' ? params.cvs : params.linePts).map((pt, i) => (
+                                                <div key={i} className="grid grid-cols-2 gap-2">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[9px] font-bold text-zinc-300">P{i} X</span>
+                                                        <input type="number" value={Math.round(pt.x)} onChange={(e) => {
+                                                            const key = attractorMode === 'curve' ? 'cvs' : 'linePts';
+                                                            const updated = [...params[key]];
+                                                            updated[i].x = parseFloat(e.target.value) || 0;
+                                                            setParams(p => ({ ...p, [key]: updated }));
+                                                        }} className="w-full bg-white border border-black/5 rounded px-2 py-1 text-[10px] font-mono" />
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-[9px] font-bold text-zinc-300">P{i} Y</span>
+                                                        <input type="number" value={Math.round(pt.y)} onChange={(e) => {
+                                                            const key = attractorMode === 'curve' ? 'cvs' : 'linePts';
+                                                            const updated = [...params[key]];
+                                                            updated[i].y = parseFloat(e.target.value) || 0;
+                                                            setParams(p => ({ ...p, [key]: updated }));
+                                                        }} className="w-full bg-white border border-black/5 rounded px-2 py-1 text-[10px] font-mono" />
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </section>
+                                )}
+
+                                {bgImage && (
+                                    <section className="p-4 bg-blue-50/50 rounded-xl space-y-3 border border-blue-100 shadow-sm">
+                                        <h2 className="text-[10px] font-black uppercase tracking-widest text-blue-400 flex items-center justify-between">
+                                            Preview Image
+                                            <button onClick={() => setBgImage(null)}><Icon name="x" size={12} /></button>
+                                        </h2>
+                                        <ControlGroup label="Width" value={params.bgWidth} min={10} max={1500} step={1} onChange={v => setParams(p => ({...p, bgWidth: parseFloat(v)}))} />
+                                        <ControlGroup label="Opacity" value={params.bgOpacity} min={0} max={1} step={0.01} onChange={v => setParams(p => ({...p, bgOpacity: parseFloat(v)}))} />
+                                    </section>
+                                )}
+                            </div>
+
+                            <div className="mt-8 p-6 bg-black rounded-2xl text-white shadow-xl flex justify-between items-center">
+                                <div>
+                                    <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">Transparency</p>
+                                    <p className="text-2xl font-black italic">{stats.transparency}%</p>
+                                </div>
+                                <div className="text-right">
+                                    <p className="text-[9px] text-zinc-500 font-bold uppercase tracking-widest">Total Holes</p>
+                                    <p className="text-sm font-black font-mono">{stats.totalDots.toLocaleString()}</p>
+                                </div>
+                            </div>
+                        </aside>
+
+                        <section ref={containerRef} className="flex-1 relative bg-[#eee] overflow-hidden min-h-[350px] cursor-default canvas-container"
+                            onMouseMove={e => handleInteraction(e, 'move')}
+                            onMouseUp={e => handleInteraction(e, 'end')}
+                            onWheel={onWheel}
+                        >
+                            {canvasDim.w > 0 && (
+                                <canvas ref={canvasRef} width={canvasDim.w} height={canvasDim.h} 
+                                    onMouseDown={e => handleInteraction(e, 'start')} 
+                                    className={`block mx-auto ${interaction.mode === 'canvasPan' ? 'cursor-grabbing' : 'cursor-crosshair'}`} 
+                                />
+                            )}
+
+                            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/80 text-white px-6 py-2 rounded-full backdrop-blur-md border border-white/10 pointer-events-none transition-opacity duration-300">
+                                <p className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2">
+                                    <Icon name="move" size={12} className="text-blue-400" />
+                                    Bi-directional Field Active | Sculpt Field Nodes
+                                </p>
+                            </div>
+
+                            <div className="absolute bottom-6 left-6 right-6 flex items-center justify-between bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-black/5 pointer-events-none">
+                                <div className="flex items-center gap-3">
+                                    <Icon name="mouse-pointer-2" size={16} className={attractorMode === 'none' ? "text-zinc-300" : "text-blue-500 animate-pulse"} />
+                                    <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400 font-mono">Field Mode: {attractorMode.toUpperCase()}</span>
+                                </div>
+                                <div className="flex flex-col items-end">
+                                    <div className="flex items-center gap-2 text-[10px] font-black italic font-mono text-red-500">
+                                        <Icon name="box" size={14} /> {params.boundaryW} x {params.boundaryH} mm
+                                    </div>
+                                    <div className="text-[8px] text-zinc-400 uppercase font-black tracking-widest mt-1">Zoom: {params.viewZoom}x</div>
+                                </div>
+                            </div>
+                        </section>
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
