@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>pattern LAB Pro v4.8</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>pattern LAB Pro v4.9</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -12,19 +12,22 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         
-        /* 使用 dvh 確保行動端高度正確 */
-        body { 
-            font-family: 'Inter', sans-serif; 
-            background-color: #f8f8f8; 
+        /* 確保全屏高度並禁用外部滾動 */
+        html, body { 
+            height: 100dvh; 
             margin: 0; 
-            height: 100dvh;
+            padding: 0; 
             overflow: hidden; 
+            background-color: #f8f8f8;
+            font-family: 'Inter', sans-serif;
         }
 
         #root { height: 100%; }
 
-        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #dcdcdc; border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #c0c0c0; }
         
         input[type="range"] { -webkit-appearance: none; background: transparent; width: 100%; }
         input[type="range"]::-webkit-slider-thumb { 
@@ -33,22 +36,24 @@
         }
         input[type="range"]::-webkit-slider-runnable-track { width: 100%; height: 2px; background: #eee; border-radius: 1px; }
         
-        .canvas-container { touch-action: none; user-select: none; }
+        .canvas-container { touch-action: none; user-select: none; position: relative; width: 100%; height: 100%; }
+        canvas { display: block; }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useLayoutEffect } = React;
+        const { useState, useEffect, useRef, useLayoutEffect, useCallback } = React;
 
-        // --- UI Components ---
+        // --- 子組件：圖標 ---
         const Icon = ({ name, size = 16, className = "" }) => {
             const iconRef = useRef(null);
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
+        // --- 子組件：控制滑塊 ---
         const ControlGroup = ({ label, value, min, max, step, onChange, dark, colorClass }) => (
             <div className="space-y-1 group">
                 <div className="flex items-center justify-between">
@@ -59,17 +64,19 @@
             </div>
         );
 
-        // --- Main App ---
+        // --- 主應用 ---
         const App = () => {
             const ATTR_HANDLE_RADIUS = 25; 
             const canvasRef = useRef(null);
             const containerRef = useRef(null);
             const fileInputRef = useRef(null);
 
+            // 狀態管理
             const [patternType, setPatternType] = useState('splineGrid'); 
             const [boundaryShape, setBoundaryShape] = useState('rect');
             const [attractorMode, setAttractorMode] = useState('none'); 
             const [bgImage, setBgImage] = useState(null);
+            const [canvasDim, setCanvasDim] = useState({ w: 0, h: 0 });
             
             const [params, setParams] = useState({
                 baseDiameter: 2.5,
@@ -85,11 +92,9 @@
                 attractorRadius: 40,
                 falloff: 1.0,
                 rotation: 0,
-                mirrorCount: 6,
-                viewZoom: 5,
+                viewZoom: 4,
                 panX: 0, panY: 0,
-                cvs: [ {x: -50, y: -20}, {x: -20, y: 30}, {x: 20, y: -30}, {x: 50, y: 20} ],
-                linePts: [ {x: -40, y: 0}, {x: 40, y: 0} ],
+                cvs: [ {x: -50, y: -20}, {x: -20, y: 30}, {x: 15, y: -25}, {x: 50, y: 20} ],
                 boundarySplineA: [ {x: -120, y: -60}, {x: -40, y: -90}, {x: 40, y: -30}, {x: 120, y: -60} ],
                 boundarySplineB: [ {x: -120, y: 60}, {x: -40, y: 30}, {x: 40, y: 90}, {x: 120, y: 60} ],
                 bgWidth: 200, bgOffsetX: 0, bgOffsetY: 0, bgOpacity: 0.5,
@@ -97,10 +102,9 @@
             });
 
             const [interaction, setInteraction] = useState({ active: false, mode: null, index: -1, startX: 0, startY: 0 });
-            const [canvasDim, setCanvasDim] = useState({ w: 0, h: 0 });
             const [stats, setStats] = useState({ totalDots: 0, visibleDots: 0, transparency: 0 });
 
-            // --- Function Defs ---
+            // 圖片上傳處理
             const handleImageUpload = (e) => {
                 const file = e.target.files[0];
                 if (file) {
@@ -122,6 +126,11 @@
                 };
             };
 
+            const isInside = (x, y) => {
+                if (boundaryShape === 'rect') return Math.abs(x) <= params.boundaryW / 2 && Math.abs(y) <= params.boundaryH / 2;
+                return (x*x + y*y) <= (params.boundaryW / 2)**2;
+            };
+
             const calculateDotSize = (x, y) => {
                 if (attractorMode === 'none') return params.baseDiameter;
                 let dAtt = 0;
@@ -139,11 +148,7 @@
                 return params.minDiameter + (params.baseDiameter - params.minDiameter) * Math.pow(t, params.falloff);
             };
 
-            const isInside = (x, y) => {
-                if (boundaryShape === 'rect') return Math.abs(x) <= params.boundaryW / 2 && Math.abs(y) <= params.boundaryH / 2;
-                return (x*x + y*y) <= (params.boundaryW / 2)**2;
-            };
-
+            // 交互邏輯
             const handleInteraction = (e, type) => {
                 if (!canvasRef.current) return;
                 const rect = canvasRef.current.getBoundingClientRect();
@@ -153,7 +158,7 @@
                 const my = (clientY - rect.top - canvasDim.h / 2 - params.panY) / params.viewZoom;
 
                 if (type === 'start') {
-                    if (e.button === 1) {
+                    if (e.button === 1) { // 滾輪中鍵平移
                         setInteraction({ active: true, mode: 'canvasPan', startX: clientX, startY: clientY, initialPanX: params.panX, initialPanY: params.panY });
                         return;
                     }
@@ -173,6 +178,7 @@
                             setInteraction({ active: true, mode: 'attractor', index: i }); return;
                         }
                     }
+                    // 背景圖變形
                     if (bgImage) {
                         const aspect = bgImage.height / bgImage.width;
                         const hx = params.bgOffsetX + params.bgWidth / 2;
@@ -192,9 +198,8 @@
                         const updated = [...params[interaction.splineKey]]; updated[interaction.index] = { x: mx, y: my };
                         setParams(p => ({ ...p, [interaction.splineKey]: updated }));
                     } else if (interaction.mode === 'attractor') {
-                        const key = attractorMode === 'curve' ? 'cvs' : 'linePts';
-                        const updated = [...params[key]]; updated[interaction.index] = { x: mx, y: my };
-                        setParams(p => ({ ...p, [key]: updated }));
+                        const updated = [...params.cvs]; updated[interaction.index] = { x: mx, y: my };
+                        setParams(p => ({ ...p, cvs: updated }));
                     } else if (interaction.mode === 'bgMove') {
                         setParams(p => ({ ...p, bgOffsetX: mx - interaction.startX, bgOffsetY: my - interaction.startY }));
                     } else if (interaction.mode === 'bgScale') {
@@ -203,59 +208,22 @@
                 } else if (type === 'end') setInteraction({ active: false, mode: null, index: -1 });
             };
 
-            const exportSVG = () => {
-                const { boundaryW, boundaryH, color, bgColor } = params;
-                const padding = 20;
-                const w = boundaryW + padding * 2;
-                const h = boundaryH + padding * 2;
-                const cx = w / 2;
-                const cy = h / 2;
-
-                let svg = `<?xml version="1.0" encoding="UTF-8"?>\n`;
-                svg += `<svg width="${w}mm" height="${h}mm" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">\n`;
-                svg += `  <rect width="100%" height="100%" fill="${bgColor}"/>\n`;
-                svg += `  <g transform="translate(${cx}, ${cy})">\n`;
-
-                const getCircleTag = (x, y) => {
-                    if (!isInside(x, y)) return "";
-                    const dia = calculateDotSize(x, y);
-                    return `    <circle cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="${(dia/2).toFixed(3)}" fill="${color}"/>\n`;
-                };
-
-                if (patternType === 'grid' || patternType === 'hexagonal') {
-                    const vStep = patternType === 'hexagonal' ? params.spacingY * 0.866 : params.spacingY;
-                    for (let r = -Math.floor(params.gridRows/2); r < Math.ceil(params.gridRows/2); r++) {
-                        const offset = (patternType === 'hexagonal' && r % 2 !== 0) ? params.spacingX * params.stagger : 0;
-                        for (let c = -Math.floor(params.gridCols/2); c < Math.ceil(params.gridCols/2); c++) {
-                            svg += getCircleTag(c * params.spacingX + offset, r * vStep);
-                        }
-                    }
-                } else if (patternType === 'splineGrid') {
-                    const nU = params.gridCols; const nV = params.gridRows;
-                    for (let j = 0; j <= nV; j++) {
-                        const v = j / nV; const staggerOffset = (j % 2 !== 0) ? params.stagger * (1/nU) : 0;
-                        for (let i = 0; i <= nU; i++) {
-                            const u = Math.min(1, Math.max(0, (i / nU) + staggerOffset));
-                            const pA = getBezierPoint(u, params.boundarySplineA); const pB = getBezierPoint(u, params.boundarySplineB);
-                            svg += getCircleTag(pA.x * (1 - v) + pB.x * v, pA.y * (1 - v) + pB.y * v);
-                        }
-                    }
-                }
-                svg += `  </g>\n</svg>`;
-                const blob = new Blob([svg], { type: 'image/svg+xml' });
-                const url = URL.createObjectURL(blob);
-                const link = document.createElement('a');
-                link.href = url;
-                link.download = `pattern-export.svg`;
-                link.click();
+            const onWheel = (e) => {
+                e.preventDefault();
+                const factor = e.deltaY > 0 ? 0.92 : 1.08;
+                setParams(p => ({ ...p, viewZoom: Math.min(Math.max(p.viewZoom * factor, 1), 100) }));
             };
 
+            // 監聽容器尺寸
             useLayoutEffect(() => {
                 const updateSize = () => { if (containerRef.current) setCanvasDim({ w: containerRef.current.clientWidth, h: containerRef.current.clientHeight }); };
-                updateSize(); window.addEventListener('resize', updateSize);
-                return () => window.removeEventListener('resize', updateSize);
+                updateSize(); 
+                const obs = new ResizeObserver(updateSize);
+                if (containerRef.current) obs.observe(containerRef.current);
+                return () => obs.disconnect();
             }, []);
 
+            // 渲染畫布
             useEffect(() => {
                 const canvas = canvasRef.current;
                 if (!canvas || canvasDim.w === 0) return;
@@ -276,11 +244,13 @@
                     ctx.restore();
                 }
 
+                // 繪製紅色修剪邊界
                 ctx.save(); ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2;
                 if (boundaryShape === 'rect') ctx.strokeRect(cx - (params.boundaryW/2)*zoom, cy - (params.boundaryH/2)*zoom, params.boundaryW*zoom, params.boundaryH*zoom);
                 else { ctx.beginPath(); ctx.arc(cx, cy, (params.boundaryW/2)*zoom, 0, Math.PI*2); ctx.stroke(); }
                 ctx.restore();
 
+                // 繪製控制曲線 (橘色)
                 if (patternType === 'splineGrid') {
                     ctx.save(); [params.boundarySplineA, params.boundarySplineB].forEach((pts, idx) => {
                         ctx.strokeStyle = idx === 0 ? '#f59e0b' : '#d97706'; ctx.lineWidth = 2; ctx.beginPath();
@@ -290,15 +260,16 @@
                     }); ctx.restore();
                 }
 
+                // 繪製吸引子 (藍色/綠色)
                 ctx.save(); if (attractorMode !== 'none') {
-                    const pts = attractorMode === 'curve' ? params.cvs : [];
                     const color = attractorMode === 'curve' ? '#3b82f6' : '#10b981';
                     ctx.strokeStyle = color; ctx.lineWidth = 2;
                     if (attractorMode === 'radial') { ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.arc(cx, cy, params.attractorRadius * zoom, 0, Math.PI*2); ctx.stroke(); }
-                    else if (attractorMode === 'curve') { ctx.beginPath(); for (let t=0; t<=1; t+=0.02) { const p = getBezierPoint(t, pts); if (t === 0) ctx.moveTo(cx + p.x * zoom, cy + p.y * zoom); else ctx.lineTo(cx + p.x * zoom, cy + p.y * zoom); }
-                    ctx.stroke(); pts.forEach(p => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + p.x * zoom, cy + p.y * zoom, 5, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke(); }); }
+                    else if (attractorMode === 'curve') { ctx.beginPath(); for (let t=0; t<=1; t+=0.02) { const p = getBezierPoint(t, params.cvs); if (t === 0) ctx.moveTo(cx + p.x * zoom, cy + p.y * zoom); else ctx.lineTo(cx + p.x * zoom, cy + p.y * zoom); }
+                    ctx.stroke(); params.cvs.forEach(p => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + p.x * zoom, cy + p.y * zoom, 5, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke(); }); }
                 } ctx.restore();
 
+                // 渲染圓點 (修剪邏輯)
                 ctx.fillStyle = params.color;
                 let visibleCount = 0; let totalCount = 0;
                 const renderDot = (x, y) => {
@@ -330,6 +301,39 @@
                 setStats({ totalDots: totalCount, visibleDots: visibleCount, transparency: area > 0 ? Math.round((visibleCount * Math.PI * (params.baseDiameter/2)**2) / area * 100) : 0 });
             }, [params, patternType, boundaryShape, attractorMode, canvasDim, bgImage]);
 
+            const exportSVG = () => {
+                const { boundaryW, boundaryH, color, bgColor } = params;
+                const w = boundaryW + 40; const h = boundaryH + 40; const cx = w / 2; const cy = h / 2;
+                let svg = `<?xml version="1.0" encoding="UTF-8"?><svg width="${w}mm" height="${h}mm" viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg">`;
+                svg += `<rect width="100%" height="100%" fill="${bgColor}"/><g transform="translate(${cx}, ${cy})">`;
+                const addCircle = (x, y) => {
+                    if (!isInside(x, y)) return "";
+                    const dia = calculateDotSize(x, y);
+                    return `<circle cx="${x.toFixed(3)}" cy="${y.toFixed(3)}" r="${(dia/2).toFixed(3)}" fill="${color}"/>`;
+                };
+                if (patternType === 'grid' || patternType === 'hexagonal') {
+                    const vStep = patternType === 'hexagonal' ? params.spacingY * 0.866 : params.spacingY;
+                    for (let r = -Math.floor(params.gridRows/2); r < Math.ceil(params.gridRows/2); r++) {
+                        const offset = (patternType === 'hexagonal' && r % 2 !== 0) ? params.spacingX * params.stagger : 0;
+                        for (let c = -Math.floor(params.gridCols/2); c < Math.ceil(params.gridCols/2); c++) svg += addCircle(c * params.spacingX + offset, r * vStep);
+                    }
+                } else if (patternType === 'splineGrid') {
+                    const nU = params.gridCols; const nV = params.gridRows;
+                    for (let j = 0; j <= nV; j++) {
+                        const v = j / nV; const staggerOffset = (j % 2 !== 0) ? params.stagger * (1/nU) : 0;
+                        for (let i = 0; i <= nU; i++) {
+                            const u = Math.min(1, Math.max(0, (i / nU) + staggerOffset));
+                            const pA = getBezierPoint(u, params.boundarySplineA); const pB = getBezierPoint(u, params.boundarySplineB);
+                            svg += addCircle(pA.x * (1 - v) + pB.x * v, pA.y * (1 - v) + pB.y * v);
+                        }
+                    }
+                }
+                svg += `</g></svg>`;
+                const blob = new Blob([svg], { type: 'image/svg+xml' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a'); link.href = url; link.download = 'pattern-lab-export.svg'; link.click();
+            };
+
             return (
                 <div className="flex flex-col h-full bg-[#f8f8f8] text-[#1a1a1a] overflow-hidden select-none">
                     <header className="flex items-center justify-between px-6 py-4 bg-white border-b border-black/5 z-20 shadow-sm shrink-0">
@@ -338,31 +342,31 @@
                             <h1 className="text-sm font-black uppercase tracking-widest text-black">pattern LAB</h1>
                         </div>
                         <div className="flex items-center gap-2">
-                            <button onClick={() => fileInputRef.current.click()} className="p-2.5 bg-gray-100 rounded-full hover:bg-gray-200"><Icon name="upload" /></button>
+                            <button onClick={() => fileInputRef.current.click()} className="p-2.5 bg-gray-100 rounded-full hover:bg-gray-200" title="Upload Background"><Icon name="upload" /></button>
                             <input ref={fileInputRef} type="file" hidden accept="image/*" onChange={handleImageUpload} />
-                            <button onClick={exportSVG} className="p-2.5 bg-black text-white rounded-full shadow-lg active:scale-95 transition-transform"><Icon name="download" /></button>
+                            <button onClick={exportSVG} className="p-2.5 bg-black text-white rounded-full shadow-lg active:scale-95 transition-transform" title="Export CAD SVG"><Icon name="download" /></button>
                         </div>
                     </header>
 
-                    <main className="flex flex-1 flex-col md:flex-row overflow-hidden h-full">
-                        <aside className="w-full md:w-96 bg-white border-r border-black/5 shadow-inner z-10 flex flex-col h-[45dvh] md:h-full shrink-0">
-                            {/* 內部滾動區域 */}
+                    <main className="flex flex-1 flex-col md:flex-row overflow-hidden">
+                        {/* 側邊欄：統一滾動容器 */}
+                        <aside className="w-full md:w-96 bg-white border-r border-black/5 shadow-inner z-10 flex flex-col shrink-0 md:h-full h-[40dvh]">
                             <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
                                 <div className="grid grid-cols-2 gap-4">
-                                    <section><h2 className="text-[10px] font-black uppercase text-gray-400 mb-2">1. Array</h2><div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                                    <section><h2 className="text-[10px] font-black uppercase text-gray-400 mb-2">1. Array Type</h2><div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
                                         {['grid', 'hexagonal', 'splineGrid'].map(m => (<button key={m} onClick={() => setPatternType(m)} className={`flex-1 p-2 rounded-md transition-all ${patternType === m ? 'bg-white shadow-sm' : 'opacity-40'}`}><Icon name={m === 'grid' ? 'grid-3x3' : m === 'hexagonal' ? 'hexagon' : 'spline'} size={14} className="mx-auto" /></button>))}
                                     </div></section>
-                                    <section><h2 className="text-[10px] font-black uppercase text-gray-400 mb-2">2. Field</h2><div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
+                                    <section><h2 className="text-[10px] font-black uppercase text-gray-400 mb-2">2. Field Mode</h2><div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
                                         {['none', 'radial', 'curve'].map(m => (<button key={m} onClick={() => setAttractorMode(m)} className={`flex-1 p-2 rounded-md transition-all ${attractorMode === m ? 'bg-white shadow-sm' : 'opacity-40'}`}><Icon name={m === 'none' ? 'ban' : m === 'radial' ? 'target' : 'spline'} size={14} className="mx-auto" /></button>))}
                                     </div></section>
                                 </div>
 
                                 <section className="space-y-4">
-                                    <h2 className="text-[10px] font-black uppercase text-gray-400 border-b pb-1">3. Hole Data (mm)</h2>
+                                    <h2 className="text-[10px] font-black uppercase text-gray-400 border-b pb-1">3. Perforation (mm)</h2>
                                     <ControlGroup label="Master Dia." value={params.baseDiameter} min={0.5} max={10} step={0.1} onChange={v => setParams(p => ({...p, baseDiameter: parseFloat(v)}))} />
                                     {attractorMode !== 'none' && <div className="p-4 bg-blue-50/30 rounded-xl space-y-4 border border-blue-100/50">
                                         <ControlGroup label="Min Dia." value={params.minDiameter} min={0.1} max={5} step={0.1} onChange={v => setParams(p => ({...p, minDiameter: parseFloat(v)}))} />
-                                        <ControlGroup label="Range" value={params.influenceRange} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, influenceRange: parseFloat(v)}))} />
+                                        <ControlGroup label="Influence" value={params.influenceRange} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, influenceRange: parseFloat(v)}))} />
                                         <ControlGroup label="Falloff" value={params.falloff} min={0.1} max={5.0} step={0.1} onChange={v => setParams(p => ({...p, falloff: parseFloat(v)}))} />
                                     </div>}
                                 </section>
@@ -370,24 +374,24 @@
                                 <section className="p-4 bg-gray-50 rounded-xl space-y-4 border border-black/5 shadow-sm">
                                     <h2 className="text-[10px] font-black uppercase text-gray-400 border-b pb-1 flex items-center gap-2"><Icon name="layers" size={12} /> 4. Pattern Engine</h2>
                                     <div className="grid grid-cols-2 gap-4">
-                                        <ControlGroup label="Cols (X)" value={params.gridCols} min={5} max={150} step={1} onChange={v => setParams(p => ({...p, gridCols: parseInt(v)}))} colorClass="text-orange-600" />
-                                        <ControlGroup label="Rows (Y)" value={params.gridRows} min={5} max={150} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />
+                                        <ControlGroup label="Cols (X)" value={params.gridCols} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, gridCols: parseInt(v)}))} colorClass="text-orange-600" />
+                                        <ControlGroup label="Rows (Y)" value={params.gridRows} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
-                                        <ControlGroup label="X-Pitch" value={params.spacingX} min={1.5} max={25} step={0.5} onChange={v => setParams(p => ({...p, spacingX: parseFloat(v)}))} />
-                                        <ControlGroup label="Y-Pitch" value={params.spacingY} min={1.5} max={25} step={0.5} onChange={v => setParams(p => ({...p, spacingY: parseFloat(v)}))} />
+                                        <ControlGroup label="X-Pitch" value={params.spacingX} min={1} max={30} step={0.5} onChange={v => setParams(p => ({...p, spacingX: parseFloat(v)}))} />
+                                        <ControlGroup label="Y-Pitch" value={params.spacingY} min={1} max={30} step={0.5} onChange={v => setParams(p => ({...p, spacingY: parseFloat(v)}))} />
                                     </div>
                                     <ControlGroup label="Stagger" value={params.stagger} min={0} max={1} step={0.01} onChange={v => setParams(p => ({...p, stagger: parseFloat(v)}))} />
                                 </section>
 
                                 <section className="space-y-4">
-                                    <h2 className="text-[10px] font-black uppercase text-gray-400 border-b pb-1">5. Boundary (Trim)</h2>
+                                    <h2 className="text-[10px] font-black uppercase text-gray-400 border-b pb-1">5. Trimming Boundary (mm)</h2>
                                     <div className="grid grid-cols-2 gap-2">
-                                        <button onClick={() => setBoundaryShape('rect')} className={`py-2 text-[9px] font-black rounded border transition-all ${boundaryShape === 'rect' ? 'bg-black text-white' : 'bg-white text-gray-300'}`}>RECT</button>
-                                        <button onClick={() => setBoundaryShape('circle')} className={`py-2 text-[9px] font-black rounded border transition-all ${boundaryShape === 'circle' ? 'bg-black text-white' : 'bg-white text-gray-300'}`}>CIRCLE</button>
+                                        <button onClick={() => setBoundaryShape('rect')} className={`py-2 text-[9px] font-black rounded border transition-all ${boundaryShape === 'rect' ? 'bg-black text-white shadow-md' : 'bg-white text-gray-300'}`}>RECT</button>
+                                        <button onClick={() => setBoundaryShape('circle')} className={`py-2 text-[9px] font-black rounded border transition-all ${boundaryShape === 'circle' ? 'bg-black text-white shadow-md' : 'bg-white text-gray-300'}`}>CIRCLE</button>
                                     </div>
-                                    <ControlGroup label="Trim W" value={params.boundaryW} min={20} max={600} step={1} onChange={v => setParams(p => ({...p, boundaryW: parseFloat(v)}))} colorClass="text-red-500" />
-                                    {boundaryShape === 'rect' && <ControlGroup label="Trim H" value={params.boundaryH} min={20} max={600} step={1} onChange={v => setParams(p => ({...p, boundaryH: parseFloat(v)}))} colorClass="text-red-500" />}
+                                    <ControlGroup label="Trim W" value={params.boundaryW} min={10} max={800} step={1} onChange={v => setParams(p => ({...p, boundaryW: parseFloat(v)}))} colorClass="text-red-500" />
+                                    {boundaryShape === 'rect' && <ControlGroup label="Trim H" value={params.boundaryH} min={10} max={800} step={1} onChange={v => setParams(p => ({...p, boundaryH: parseFloat(v)}))} colorClass="text-red-500" />}
                                 </section>
 
                                 {bgImage && (
@@ -396,23 +400,50 @@
                                             Preview Image
                                             <button onClick={() => setBgImage(null)}><Icon name="x" size={12} /></button>
                                         </h2>
-                                        <ControlGroup label="Width" value={params.bgWidth} min={10} max={1500} step={1} onChange={v => setParams(p => ({...p, bgWidth: parseFloat(v)}))} />
+                                        <ControlGroup label="Width" value={params.bgWidth} min={10} max={2000} step={1} onChange={v => setParams(p => ({...p, bgWidth: parseFloat(v)}))} />
                                         <ControlGroup label="Opacity" value={params.bgOpacity} min={0} max={1} step={0.01} onChange={v => setParams(p => ({...p, bgOpacity: parseFloat(v)}))} />
                                     </section>
                                 )}
 
-                                {/* 固定在捲動內容底部的數據面板，增加額外 padding */}
-                                <div className="p-6 bg-black rounded-2xl text-white shadow-xl space-y-3 font-mono mt-4 mb-12">
-                                    <div className="flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase">Pattern Total</p><p className="text-sm text-zinc-300">{stats.totalDots.toLocaleString()}</p></div>
-                                    <div className="flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase font-black">Visible (Trimmed)</p><p className="text-xl font-black italic">{stats.visibleDots.toLocaleString()}</p></div>
+                                {/* 底部統計面板 - 增加底部外邊距防止裁切 */}
+                                <div className="p-6 bg-black rounded-2xl text-white shadow-xl space-y-3 font-mono mt-6 mb-12">
+                                    <div className="flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase">Master Count</p><p className="text-sm text-zinc-300">{stats.totalDots.toLocaleString()}</p></div>
+                                    <div className="flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase font-black">Visible Perfs</p><p className="text-xl font-black italic">{stats.visibleDots.toLocaleString()}</p></div>
+                                    <div className="pt-2 border-t border-white/10 flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase">Open Area</p><p className="text-sm font-bold">{stats.transparency}%</p></div>
                                 </div>
                             </div>
                         </aside>
 
-                        <section ref={containerRef} className="flex-1 relative bg-[#eee] overflow-hidden canvas-container" onMouseMove={e => handleInteraction(e, 'move')} onMouseUp={e => handleInteraction(e, 'end')} onWheel={e => { e.preventDefault(); const factor = e.deltaY > 0 ? 0.9 : 1.1; setParams(p => ({ ...p, viewZoom: Math.min(Math.max(p.viewZoom * factor, 1), 50) })); }}>
-                            {canvasDim.w > 0 && <canvas ref={canvasRef} width={canvasDim.w} height={canvasDim.h} onMouseDown={e => handleInteraction(e, 'start')} className={`block mx-auto ${interaction.mode === 'canvasPan' ? 'cursor-grabbing' : 'cursor-crosshair'}`} />}
-                            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/80 text-white px-6 py-2 rounded-full backdrop-blur-md border border-white/10 pointer-events-none transition-opacity duration-300">
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2"><Icon name="scissors" size={12} className="text-red-400" />Trimming Mode Active</p>
+                        <section ref={containerRef} className="flex-1 relative bg-[#eee] overflow-hidden canvas-container" 
+                            onMouseMove={e => handleInteraction(e, 'move')} 
+                            onMouseUp={e => handleInteraction(e, 'end')} 
+                            onWheel={onWheel}
+                        >
+                            {canvasDim.w > 0 && (
+                                <canvas 
+                                    ref={canvasRef} 
+                                    width={canvasDim.w} 
+                                    height={canvasDim.h} 
+                                    onMouseDown={e => handleInteraction(e, 'start')} 
+                                    className={`block mx-auto ${interaction.mode === 'canvasPan' ? 'cursor-grabbing' : 'cursor-crosshair'}`} 
+                                />
+                            )}
+                            
+                            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/80 text-white px-6 py-2 rounded-full backdrop-blur-md border border-white/10 pointer-events-none transition-opacity duration-300 shadow-2xl">
+                                <p className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2">
+                                    <Icon name="scissors" size={12} className="text-red-400" />
+                                    Trimming Active | {Math.round(params.viewZoom * 10) / 10}x
+                                </p>
+                            </div>
+
+                            <div className="absolute bottom-6 left-6 right-6 flex items-center justify-between bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-black/5 pointer-events-none">
+                                <div className="flex items-center gap-3">
+                                    <Icon name="navigation" size={16} className="text-zinc-300" />
+                                    <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400 font-mono">Pan: {Math.round(params.panX)}, {Math.round(params.panY)}</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-[10px] font-black italic font-mono text-red-500">
+                                    <Icon name="maximize" size={14} /> {params.boundaryW} x {params.boundaryH} mm
+                                </div>
                             </div>
                         </section>
                     </main>
