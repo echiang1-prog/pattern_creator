@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>pattern LAB Pro v4.9</title>
+    <title>pattern LAB Pro v5.1</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -12,7 +12,6 @@
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
         
-        /* 確保全屏高度並禁用外部滾動 */
         html, body { 
             height: 100dvh; 
             margin: 0; 
@@ -44,16 +43,14 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef, useLayoutEffect, useCallback } = React;
+        const { useState, useEffect, useRef, useLayoutEffect } = React;
 
-        // --- 子組件：圖標 ---
         const Icon = ({ name, size = 16, className = "" }) => {
             const iconRef = useRef(null);
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [name]);
             return <i data-lucide={name} style={{ width: size, height: size }} className={className}></i>;
         };
 
-        // --- 子組件：控制滑塊 ---
         const ControlGroup = ({ label, value, min, max, step, onChange, dark, colorClass }) => (
             <div className="space-y-1 group">
                 <div className="flex items-center justify-between">
@@ -64,14 +61,12 @@
             </div>
         );
 
-        // --- 主應用 ---
         const App = () => {
             const ATTR_HANDLE_RADIUS = 25; 
             const canvasRef = useRef(null);
             const containerRef = useRef(null);
             const fileInputRef = useRef(null);
 
-            // 狀態管理
             const [patternType, setPatternType] = useState('splineGrid'); 
             const [boundaryShape, setBoundaryShape] = useState('rect');
             const [attractorMode, setAttractorMode] = useState('none'); 
@@ -84,7 +79,7 @@
                 spacingX: 8.0,
                 spacingY: 8.0,
                 gridCols: 30,
-                gridRows: 20,
+                gridRows: 20, // This is RINGS in radial mode
                 stagger: 0.5,
                 boundaryW: 140,
                 boundaryH: 100,
@@ -92,6 +87,7 @@
                 attractorRadius: 40,
                 falloff: 1.0,
                 rotation: 0,
+                mirrorCount: 6,
                 viewZoom: 4,
                 panX: 0, panY: 0,
                 cvs: [ {x: -50, y: -20}, {x: -20, y: 30}, {x: 15, y: -25}, {x: 50, y: 20} ],
@@ -104,7 +100,6 @@
             const [interaction, setInteraction] = useState({ active: false, mode: null, index: -1, startX: 0, startY: 0 });
             const [stats, setStats] = useState({ totalDots: 0, visibleDots: 0, transparency: 0 });
 
-            // 圖片上傳處理
             const handleImageUpload = (e) => {
                 const file = e.target.files[0];
                 if (file) {
@@ -148,7 +143,6 @@
                 return params.minDiameter + (params.baseDiameter - params.minDiameter) * Math.pow(t, params.falloff);
             };
 
-            // 交互邏輯
             const handleInteraction = (e, type) => {
                 if (!canvasRef.current) return;
                 const rect = canvasRef.current.getBoundingClientRect();
@@ -158,7 +152,7 @@
                 const my = (clientY - rect.top - canvasDim.h / 2 - params.panY) / params.viewZoom;
 
                 if (type === 'start') {
-                    if (e.button === 1) { // 滾輪中鍵平移
+                    if (e.button === 1) {
                         setInteraction({ active: true, mode: 'canvasPan', startX: clientX, startY: clientY, initialPanX: params.panX, initialPanY: params.panY });
                         return;
                     }
@@ -178,7 +172,6 @@
                             setInteraction({ active: true, mode: 'attractor', index: i }); return;
                         }
                     }
-                    // 背景圖變形
                     if (bgImage) {
                         const aspect = bgImage.height / bgImage.width;
                         const hx = params.bgOffsetX + params.bgWidth / 2;
@@ -214,7 +207,6 @@
                 setParams(p => ({ ...p, viewZoom: Math.min(Math.max(p.viewZoom * factor, 1), 100) }));
             };
 
-            // 監聽容器尺寸
             useLayoutEffect(() => {
                 const updateSize = () => { if (containerRef.current) setCanvasDim({ w: containerRef.current.clientWidth, h: containerRef.current.clientHeight }); };
                 updateSize(); 
@@ -223,7 +215,6 @@
                 return () => obs.disconnect();
             }, []);
 
-            // 渲染畫布
             useEffect(() => {
                 const canvas = canvasRef.current;
                 if (!canvas || canvasDim.w === 0) return;
@@ -244,13 +235,11 @@
                     ctx.restore();
                 }
 
-                // 繪製紅色修剪邊界
                 ctx.save(); ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2;
                 if (boundaryShape === 'rect') ctx.strokeRect(cx - (params.boundaryW/2)*zoom, cy - (params.boundaryH/2)*zoom, params.boundaryW*zoom, params.boundaryH*zoom);
                 else { ctx.beginPath(); ctx.arc(cx, cy, (params.boundaryW/2)*zoom, 0, Math.PI*2); ctx.stroke(); }
                 ctx.restore();
 
-                // 繪製控制曲線 (橘色)
                 if (patternType === 'splineGrid') {
                     ctx.save(); [params.boundarySplineA, params.boundarySplineB].forEach((pts, idx) => {
                         ctx.strokeStyle = idx === 0 ? '#f59e0b' : '#d97706'; ctx.lineWidth = 2; ctx.beginPath();
@@ -260,7 +249,6 @@
                     }); ctx.restore();
                 }
 
-                // 繪製吸引子 (藍色/綠色)
                 ctx.save(); if (attractorMode !== 'none') {
                     const color = attractorMode === 'curve' ? '#3b82f6' : '#10b981';
                     ctx.strokeStyle = color; ctx.lineWidth = 2;
@@ -269,7 +257,6 @@
                     ctx.stroke(); params.cvs.forEach(p => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + p.x * zoom, cy + p.y * zoom, 5, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke(); }); }
                 } ctx.restore();
 
-                // 渲染圓點 (修剪邏輯)
                 ctx.fillStyle = params.color;
                 let visibleCount = 0; let totalCount = 0;
                 const renderDot = (x, y) => {
@@ -285,6 +272,16 @@
                     for (let r = -Math.floor(params.gridRows/2); r < Math.ceil(params.gridRows/2); r++) {
                         const offset = (patternType === 'hexagonal' && r % 2 !== 0) ? params.spacingX * params.stagger : 0;
                         for (let c = -Math.floor(params.gridCols/2); c < Math.ceil(params.gridCols/2); c++) renderDot(c * params.spacingX + offset, r * vStep);
+                    }
+                } else if (patternType === 'radial') {
+                    const rings = params.gridRows;
+                    for (let r = 1; r <= rings; r++) {
+                        const rad = r * params.spacingY;
+                        const count = Math.max(params.mirrorCount, Math.round((2 * Math.PI * rad / params.spacingX) / params.mirrorCount) * params.mirrorCount);
+                        for (let i = 0; i < count; i++) {
+                            const angle = (i / count) * Math.PI * 2 + (params.rotation * Math.PI / 180);
+                            renderDot(rad * Math.cos(angle), rad * Math.sin(angle));
+                        }
                     }
                 } else if (patternType === 'splineGrid') {
                     const nU = params.gridCols; const nV = params.gridRows;
@@ -316,6 +313,16 @@
                     for (let r = -Math.floor(params.gridRows/2); r < Math.ceil(params.gridRows/2); r++) {
                         const offset = (patternType === 'hexagonal' && r % 2 !== 0) ? params.spacingX * params.stagger : 0;
                         for (let c = -Math.floor(params.gridCols/2); c < Math.ceil(params.gridCols/2); c++) svg += addCircle(c * params.spacingX + offset, r * vStep);
+                    }
+                } else if (patternType === 'radial') {
+                    const rings = params.gridRows;
+                    for (let r = 1; r <= rings; r++) {
+                        const rad = r * params.spacingY;
+                        const count = Math.max(params.mirrorCount, Math.round((2 * Math.PI * rad / params.spacingX) / params.mirrorCount) * params.mirrorCount);
+                        for (let i = 0; i < count; i++) {
+                            const angle = (i / count) * Math.PI * 2 + (params.rotation * Math.PI / 180);
+                            svg += addCircle(rad * Math.cos(angle), rad * Math.sin(angle));
+                        }
                     }
                 } else if (patternType === 'splineGrid') {
                     const nU = params.gridCols; const nV = params.gridRows;
@@ -349,15 +356,14 @@
                     </header>
 
                     <main className="flex flex-1 flex-col md:flex-row overflow-hidden">
-                        {/* 側邊欄：統一滾動容器 */}
                         <aside className="w-full md:w-96 bg-white border-r border-black/5 shadow-inner z-10 flex flex-col shrink-0 md:h-full h-[40dvh]">
                             <div className="flex-1 overflow-y-auto custom-scrollbar p-6 space-y-6">
                                 <div className="grid grid-cols-2 gap-4">
                                     <section><h2 className="text-[10px] font-black uppercase text-gray-400 mb-2">1. Array Type</h2><div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
-                                        {['grid', 'hexagonal', 'splineGrid'].map(m => (<button key={m} onClick={() => setPatternType(m)} className={`flex-1 p-2 rounded-md transition-all ${patternType === m ? 'bg-white shadow-sm' : 'opacity-40'}`}><Icon name={m === 'grid' ? 'grid-3x3' : m === 'hexagonal' ? 'hexagon' : 'spline'} size={14} className="mx-auto" /></button>))}
+                                        {['grid', 'hexagonal', 'radial', 'splineGrid'].map(m => (<button key={m} onClick={() => setPatternType(m)} className={`flex-1 p-2 rounded-md transition-all ${patternType === m ? 'bg-white shadow-sm' : 'opacity-40'}`}><Icon name={m === 'grid' ? 'grid-3x3' : m === 'hexagonal' ? 'hexagon' : m === 'radial' ? 'circle-dot' : 'spline'} size={14} className="mx-auto" /></button>))}
                                     </div></section>
                                     <section><h2 className="text-[10px] font-black uppercase text-gray-400 mb-2">2. Field Mode</h2><div className="flex gap-1 bg-gray-50 p-1 rounded-lg">
-                                        {['none', 'radial', 'curve'].map(m => (<button key={m} onClick={() => setAttractorMode(m)} className={`flex-1 p-2 rounded-md transition-all ${attractorMode === m ? 'bg-white shadow-sm' : 'opacity-40'}`}><Icon name={m === 'none' ? 'ban' : m === 'radial' ? 'target' : 'spline'} size={14} className="mx-auto" /></button>))}
+                                        {['none', 'radial', 'curve'].map(m => (<button key={m} onClick={() => setAttractorMode(m)} className={`flex-1 p-2 rounded-md transition-all ${attractorMode === m ? 'bg-white shadow-sm' : 'opacity-40'}`}><Icon name={m === 'none' ? 'ban' : m === 'radial' ? 'target' : m === 'spline'} size={14} className="mx-auto" /></button>))}
                                     </div></section>
                                 </div>
 
@@ -373,15 +379,30 @@
 
                                 <section className="p-4 bg-gray-50 rounded-xl space-y-4 border border-black/5 shadow-sm">
                                     <h2 className="text-[10px] font-black uppercase text-gray-400 border-b pb-1 flex items-center gap-2"><Icon name="layers" size={12} /> 4. Pattern Engine</h2>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <ControlGroup label="Cols (X)" value={params.gridCols} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, gridCols: parseInt(v)}))} colorClass="text-orange-600" />
-                                        <ControlGroup label="Rows (Y)" value={params.gridRows} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />
-                                    </div>
+                                    
+                                    {/* 動態顯示：極座標模式僅顯示 RINGS */}
+                                    {patternType === 'radial' ? (
+                                        <ControlGroup label="Rings" value={params.gridRows} min={1} max={150} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />
+                                    ) : (
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <ControlGroup label="Cols (X)" value={params.gridCols} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, gridCols: parseInt(v)}))} colorClass="text-orange-600" />
+                                            <ControlGroup label="Rows (Y)" value={params.gridRows} min={5} max={200} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />
+                                        </div>
+                                    )}
+
                                     <div className="grid grid-cols-2 gap-4">
                                         <ControlGroup label="X-Pitch" value={params.spacingX} min={1} max={30} step={0.5} onChange={v => setParams(p => ({...p, spacingX: parseFloat(v)}))} />
                                         <ControlGroup label="Y-Pitch" value={params.spacingY} min={1} max={30} step={0.5} onChange={v => setParams(p => ({...p, spacingY: parseFloat(v)}))} />
                                     </div>
-                                    <ControlGroup label="Stagger" value={params.stagger} min={0} max={1} step={0.01} onChange={v => setParams(p => ({...p, stagger: parseFloat(v)}))} />
+
+                                    {patternType === 'radial' ? (
+                                        <div className="space-y-4 pt-2">
+                                            <ControlGroup label="Mirror Count" value={params.mirrorCount} min={1} max={32} step={1} onChange={v => setParams(p => ({...p, mirrorCount: parseInt(v)}))} colorClass="text-emerald-600" />
+                                            <ControlGroup label="Rotation" value={params.rotation} min={0} max={360} step={1} onChange={v => setParams(p => ({...p, rotation: parseFloat(v)}))} colorClass="text-emerald-600" />
+                                        </div>
+                                    ) : (
+                                        <ControlGroup label="Stagger" value={params.stagger} min={0} max={1} step={0.01} onChange={v => setParams(p => ({...p, stagger: parseFloat(v)}))} />
+                                    )}
                                 </section>
 
                                 <section className="space-y-4">
@@ -396,17 +417,13 @@
 
                                 {bgImage && (
                                     <section className="p-4 bg-blue-50/50 rounded-xl space-y-3 border border-blue-100 shadow-sm">
-                                        <h2 className="text-[10px] font-black uppercase tracking-widest text-blue-400 flex items-center justify-between">
-                                            Preview Image
-                                            <button onClick={() => setBgImage(null)}><Icon name="x" size={12} /></button>
-                                        </h2>
+                                        <h2 className="text-[10px] font-black uppercase tracking-widest text-blue-400 flex items-center justify-between">Preview Image<button onClick={() => setBgImage(null)}><Icon name="x" size={12} /></button></h2>
                                         <ControlGroup label="Width" value={params.bgWidth} min={10} max={2000} step={1} onChange={v => setParams(p => ({...p, bgWidth: parseFloat(v)}))} />
                                         <ControlGroup label="Opacity" value={params.bgOpacity} min={0} max={1} step={0.01} onChange={v => setParams(p => ({...p, bgOpacity: parseFloat(v)}))} />
                                     </section>
                                 )}
 
-                                {/* 底部統計面板 - 增加底部外邊距防止裁切 */}
-                                <div className="p-6 bg-black rounded-2xl text-white shadow-xl space-y-3 font-mono mt-6 mb-12">
+                                <div className="p-6 bg-black rounded-2xl text-white shadow-xl space-y-3 font-mono mt-6 mb-12 shrink-0">
                                     <div className="flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase">Master Count</p><p className="text-sm text-zinc-300">{stats.totalDots.toLocaleString()}</p></div>
                                     <div className="flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase font-black">Visible Perfs</p><p className="text-xl font-black italic">{stats.visibleDots.toLocaleString()}</p></div>
                                     <div className="pt-2 border-t border-white/10 flex justify-between items-end"><p className="text-[9px] text-zinc-500 uppercase">Open Area</p><p className="text-sm font-bold">{stats.transparency}%</p></div>
@@ -419,31 +436,15 @@
                             onMouseUp={e => handleInteraction(e, 'end')} 
                             onWheel={onWheel}
                         >
-                            {canvasDim.w > 0 && (
-                                <canvas 
-                                    ref={canvasRef} 
-                                    width={canvasDim.w} 
-                                    height={canvasDim.h} 
-                                    onMouseDown={e => handleInteraction(e, 'start')} 
-                                    className={`block mx-auto ${interaction.mode === 'canvasPan' ? 'cursor-grabbing' : 'cursor-crosshair'}`} 
-                                />
-                            )}
+                            {canvasDim.w > 0 && <canvas ref={canvasRef} width={canvasDim.w} height={canvasDim.h} onMouseDown={e => handleInteraction(e, 'start')} className={`block mx-auto ${interaction.mode === 'canvasPan' ? 'cursor-grabbing' : 'cursor-crosshair'}`} />}
                             
                             <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-black/80 text-white px-6 py-2 rounded-full backdrop-blur-md border border-white/10 pointer-events-none transition-opacity duration-300 shadow-2xl">
-                                <p className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2">
-                                    <Icon name="scissors" size={12} className="text-red-400" />
-                                    Trimming Active | {Math.round(params.viewZoom * 10) / 10}x
-                                </p>
+                                <p className="text-[10px] font-black uppercase tracking-[0.2em] flex items-center gap-2"><Icon name="scissors" size={12} className="text-red-400" />Trimming Active | {Math.round(params.viewZoom * 10) / 10}x</p>
                             </div>
 
                             <div className="absolute bottom-6 left-6 right-6 flex items-center justify-between bg-white/95 backdrop-blur-md p-4 rounded-2xl shadow-2xl border border-black/5 pointer-events-none">
-                                <div className="flex items-center gap-3">
-                                    <Icon name="navigation" size={16} className="text-zinc-300" />
-                                    <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400 font-mono">Pan: {Math.round(params.panX)}, {Math.round(params.panY)}</span>
-                                </div>
-                                <div className="flex items-center gap-2 text-[10px] font-black italic font-mono text-red-500">
-                                    <Icon name="maximize" size={14} /> {params.boundaryW} x {params.boundaryH} mm
-                                </div>
+                                <div className="flex items-center gap-3"><Icon name="navigation" size={16} className="text-zinc-300" /><span className="text-[9px] font-black uppercase tracking-widest text-zinc-400 font-mono">Pan: {Math.round(params.panX)}, {Math.round(params.panY)}</span></div>
+                                <div className="flex items-center gap-2 text-[10px] font-black italic font-mono text-red-500"><Icon name="maximize" size={14} /> {params.boundaryW} x {params.boundaryH} mm</div>
                             </div>
                         </section>
                     </main>
