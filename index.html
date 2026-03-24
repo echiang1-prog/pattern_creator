@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>pattern LAB Pro v8.7</title>
+    <title>pattern LAB Pro v9.2</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -55,7 +55,7 @@
             const containerRef = useRef(null);
             const fileInputRef = useRef(null);
 
-            const [patternType, setPatternType] = useState('splineGrid'); 
+            const [patternType, setPatternType] = useState('radial'); 
             const [boundaryShape, setBoundaryShape] = useState('rect');
             const [attractorMode, setAttractorMode] = useState('radial'); 
             const [trimTarget, setTrimTarget] = useState('dots'); 
@@ -354,6 +354,7 @@
                     ctx.restore();
                 }
 
+                // Physical Boundary Rendering (Red)
                 ctx.save(); ctx.strokeStyle = '#ef4444'; ctx.lineWidth = 2;
                 if (boundaryShape === 'rect') {
                     ctx.strokeRect(cx + params.bL * zoom, cy + params.bT * zoom, (params.bR - params.bL) * zoom, (params.bB - params.bT) * zoom);
@@ -370,31 +371,43 @@
                 }
                 ctx.restore();
 
-                if (patternType === 'splineGrid') {
-                    ctx.save(); [params.boundarySplineA, params.boundarySplineB].forEach((pts, idx) => {
-                        ctx.strokeStyle = idx === 0 ? '#f59e0b' : '#d97706'; ctx.lineWidth = 2; ctx.beginPath();
-                        for (let t=0; t<=1; t+=0.02) { const p = getBezierPoint(t, pts); if (t === 0) ctx.moveTo(cx + p.x * zoom, cy + p.y * zoom); else ctx.lineTo(cx + p.x * zoom, cy + p.y * zoom); }
-                        ctx.stroke();
-                        pts.forEach(p => { ctx.fillStyle = idx === 0 ? '#f59e0b' : '#d97706'; ctx.beginPath(); ctx.arc(cx + p.x * zoom, cy + p.y * zoom, 5, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 1.5; ctx.stroke(); });
-                    }); ctx.restore();
-                }
-
+                // Field Attractors (Dashed)
                 ctx.save(); if (attractorMode !== 'none') {
-                    const color = attractorMode === 'curve' ? '#3b82f6' : attractorMode === 'line' ? '#ef4444' : '#10b981';
+                    const color = attractorMode === 'curve' ? '#3b82f6' : attractorMode === 'line' ? '#facc15' : '#10b981';
                     ctx.strokeStyle = color; ctx.lineWidth = 2;
+                    ctx.setLineDash([4, 4]); 
+
                     if (attractorMode === 'radial') {
-                        ctx.setLineDash([4, 4]); ctx.beginPath(); ctx.arc(cx, cy, params.attractorRadius * zoom, 0, Math.PI*2); ctx.stroke();
-                        ctx.setLineDash([]); ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + params.attractorRadius * zoom, cy, 6, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+                        ctx.beginPath(); ctx.arc(cx, cy, params.attractorRadius * zoom, 0, Math.PI*2); ctx.stroke();
                     } else if (attractorMode === 'curve' || attractorMode === 'line') {
                         ctx.beginPath();
                         const pts = attractorMode === 'curve' ? params.cvs : params.linePts;
-                        if (attractorMode === 'curve') for (let t=0; t<=1; t+=0.02) { const p = getBezierPoint(t, pts); if (t === 0) ctx.moveTo(cx + p.x * zoom, cy + p.y * zoom); else ctx.lineTo(cx + p.x * zoom, cy + p.y * zoom); }
-                        else { ctx.moveTo(cx + pts[0].x * zoom, cy + pts[0].y * zoom); ctx.lineTo(cx + pts[1].x * zoom, cy + pts[1].y * zoom); }
+                        if (attractorMode === 'curve') {
+                            for (let t=0; t<=1; t+=0.02) { 
+                                const p = getBezierPoint(t, pts); 
+                                if (t === 0) ctx.moveTo(cx + p.x * zoom, cy + p.y * zoom); 
+                                else ctx.lineTo(cx + p.x * zoom, cy + p.y * zoom); 
+                            }
+                        } else {
+                            ctx.moveTo(cx + pts[0].x * zoom, cy + pts[0].y * zoom); 
+                            ctx.lineTo(cx + pts[1].x * zoom, cy + pts[1].y * zoom);
+                        }
                         ctx.stroke();
-                        pts.forEach(p => { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + p.x * zoom, cy + p.y * zoom, 5, 0, Math.PI*2); ctx.fill(); ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke(); });
+                        ctx.setLineDash([]); 
+                        pts.forEach(p => {
+                            ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + p.x * zoom, cy + p.y * zoom, 5, 0, Math.PI*2); ctx.fill();
+                            ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
+                        });
+                    }
+                    if (attractorMode === 'radial') {
+                         ctx.setLineDash([]);
+                         ctx.fillStyle = color; ctx.beginPath(); ctx.arc(cx + params.attractorRadius * zoom, cy, 6, 0, Math.PI*2); ctx.fill();
+                         ctx.strokeStyle = 'white'; ctx.lineWidth = 2; ctx.stroke();
                     }
                 } ctx.restore();
 
+                // Perforation Dots
+                ctx.setLineDash([]);
                 ctx.fillStyle = params.color;
                 let visibleCount = 0;
                 let minFound = Infinity, maxFound = -Infinity;
@@ -468,6 +481,7 @@
                     }
                 }
 
+                // Hover Highlights
                 if (hoverHighlight !== 'none') {
                     ctx.save();
                     const targets = hoverHighlight === 'max' ? maxPoints : minPoints;
@@ -533,22 +547,23 @@
                                 </section>
                                 <section className="p-4 bg-gray-50 rounded-xl space-y-4 border border-black/5 shadow-sm">
                                     <h2 className="text-[10px] font-black uppercase text-gray-400 border-b pb-1 flex items-center gap-2"><Icon name="layers" size={12} /> 4. Pattern Engine</h2>
-                                    
-                                    {/* Updated Radial Array Controls */}
-                                    {patternType === 'radial' ? (
-                                        <ControlGroup label="Rings" value={params.gridRows} min={1} max={150} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />
-                                    ) : (
-                                        <div className="grid grid-cols-2 gap-4">
-                                            <ControlGroup label="Cols (X)" value={params.gridCols} min={2} max={150} step={1} onChange={v => setParams(p => ({...p, gridCols: parseInt(v)}))} colorClass="text-orange-600" />
-                                            <ControlGroup label="Rows (Y)" value={params.gridRows} min={2} max={150} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />
-                                        </div>
-                                    )}
-
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <ControlGroup label={patternType === 'radial' ? "Rings" : "Cols (X)"} value={patternType === 'radial' ? params.gridRows : params.gridCols} min={2} max={150} step={1} onChange={v => setParams(p => (patternType === 'radial' ? {...p, gridRows: parseInt(v)} : {...p, gridCols: parseInt(v)}))} colorClass="text-orange-600" />
+                                        {patternType !== 'radial' && <ControlGroup label="Rows (Y)" value={params.gridRows} min={2} max={150} step={1} onChange={v => setParams(p => ({...p, gridRows: parseInt(v)}))} colorClass="text-orange-600" />}
+                                    </div>
                                     <div className="grid grid-cols-2 gap-4">
                                         <ControlGroup label="X-Pitch" value={params.spacingX} min={1.5} max={30} step={0.5} onChange={v => setParams(p => ({...p, spacingX: parseFloat(v)}))} />
                                         <ControlGroup label="Y-Pitch" value={params.spacingY} min={1.5} max={30} step={0.5} onChange={v => setParams(p => ({...p, spacingY: parseFloat(v)}))} />
                                     </div>
-                                    <ControlGroup label={patternType === 'radial' ? "Rotation" : "Stagger"} value={patternType === 'radial' ? params.rotation : params.stagger} min={0} max={patternType === 'radial' ? 360 : 1} step={0.01} onChange={v => setParams(p => (patternType === 'radial' ? {...p, rotation: parseFloat(v)} : {...p, stagger: parseFloat(v)}))} />
+                                    {/* Stagger Visibility Check */}
+                                    {(patternType === 'hexagonal' || patternType === 'splineGrid' || patternType === 'radial') && (
+                                        <ControlGroup 
+                                            label={patternType === 'radial' ? "Rotation" : "Stagger"} 
+                                            value={patternType === 'radial' ? params.rotation : params.stagger} 
+                                            min={0} max={patternType === 'radial' ? 360 : 1} step={0.01} 
+                                            onChange={v => setParams(p => (patternType === 'radial' ? {...p, rotation: parseFloat(v)} : {...p, stagger: parseFloat(v)}))} 
+                                        />
+                                    )}
                                     {patternType === 'radial' && <ControlGroup label="Mirror Array" value={params.mirrorCount} min={1} max={32} step={1} onChange={v => setParams(p => ({...p, mirrorCount: parseInt(v)}))} colorClass="text-emerald-600" />}
                                 </section>
                                 <section className="space-y-4 text-zinc-800">
@@ -571,8 +586,8 @@
                         <section ref={containerRef} className="flex-1 relative bg-[#eee] overflow-hidden canvas-container" onMouseMove={e => handleInteraction(e, 'move')} onMouseUp={e => handleInteraction(e, 'end')} onWheel={onWheel}>
                             {canvasDim.w > 0 && <canvas ref={canvasRef} width={canvasDim.w} height={canvasDim.h} onMouseDown={e => handleInteraction(e, 'start')} className={`block mx-auto ${interaction.mode === 'canvasPan' ? 'cursor-grabbing' : 'cursor-crosshair'}`} />}
                             
-                            <div className="absolute bottom-4 right-4 pointer-events-none opacity-40">
-                                <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600">
+                            <div className="absolute bottom-2 right-6 pointer-events-none opacity-40 text-right">
+                                <p className="text-[8px] font-black uppercase tracking-widest text-zinc-600 leading-relaxed">
                                     vide coded by Ethan Chiang, powered by Gemini
                                 </p>
                             </div>
